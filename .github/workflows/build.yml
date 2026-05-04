@@ -1,4 +1,4 @@
-name: TqModes Build IPA
+name: TqModes Build IPA VIP
 on:
   workflow_dispatch:
     inputs:
@@ -15,15 +15,72 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Create IPA Structure
+      - name: Build Native iOS App
         run: |
           mkdir -p Payload/App.app
-          # Tạo file chuyển hướng link web
-          echo "<html><head><meta charset='UTF-8'></head><script>window.location='${{ github.event.inputs.web_url }}'</script></html>" > Payload/App.app/index.html
-          # Đóng gói thành IPA
+          
+          # 1. Tạo mã nguồn Swift (Tạo app WebView xịn của Apple)
+          cat << 'EOF' > main.swift
+          import SwiftUI
+          import WebKit
+
+          struct WebView: UIViewRepresentable {
+              func makeUIView(context: Context) -> WKWebView {
+                  let webView = WKWebView()
+                  webView.scrollView.bounces = false
+                  return webView
+              }
+              func updateUIView(_ uiView: WKWebView, context: Context) {
+                  if let url = URL(string: "${{ github.event.inputs.web_url }}") {
+                      uiView.load(URLRequest(url: url))
+                  }
+              }
+          }
+
+          @main
+          struct WrapperApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      WebView().ignoresSafeArea()
+                  }
+              }
+          }
+          EOF
+          
+          # 2. Dùng máy Mac ảo biên dịch thành File Binary cho iOS
+          swiftc main.swift -o Payload/App.app/App -target arm64-apple-ios14.0 -sdk $(xcrun --show-sdk-path --sdk iphoneos) -parse-as-library
+          
+          # 3. Tạo thẻ căn cước Info.plist (Bắt buộc để ESign không báo lỗi)
+          cat << 'EOF' > Payload/App.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>App</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.tqmodes.${{ github.run_id }}</string>
+              <key>CFBundleName</key>
+              <string>${{ github.event.inputs.app_name }}</string>
+              <key>CFBundleDisplayName</key>
+              <string>${{ github.event.inputs.app_name }}</string>
+              <key>CFBundleVersion</key>
+              <string>1.0</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>UILaunchStoryboardName</key>
+              <string>LaunchScreen</string>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+          
+          # 4. Đóng gói thành chuẩn IPA
           zip -r "${{ github.event.inputs.app_name }}.ipa" Payload/
           
       - name: Export IPA

@@ -1,34 +1,44 @@
-name: TqModes VIP Xcode Build
+name: System Engine Xcode Build
 on:
   workflow_dispatch:
     inputs:
       app_name:
-        default: 'TqModes'
+        default: 'AppVIP'
       web_url:
         default: ''
       use_local_html:
         default: 'false'
 
+# Cấp quyền ghi để GitHub đẩy file vào Release cho Bot Telegram lấy về
+permissions:
+  contents: write 
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: Checkout Source
         uses: actions/checkout@v4
       
-      - name: Cài đặt XcodeGen
+      - name: Khởi tạo XcodeGen
         run: brew install xcodegen
 
-      - name: Tạo Cấu Trúc App Chuẩn
+      - name: Cấu Trúc App (Độc quyền & Ẩn danh)
         run: |
+          # 1. LỌC TÊN APP (Xóa khoảng trắng/kí tự đặc biệt để làm lõi Project)
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
+          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="AppVIP"; fi
+
           mkdir -p AppSource
           
-          cat << 'EOF' > project.yml
-          name: TqApp
+          # 2. TẠO PROJECT ẨN DANH HOÀN TOÀN TÊN CỦA USER
+          cat << EOF > project.yml
+          name: $SAFE_NAME
           options:
-            bundleIdPrefix: com.tqmodes
+            bundleIdPrefix: com.build.$SAFE_NAME
           targets:
-            TqApp:
+            $SAFE_NAME:
               type: application
               platform: iOS
               deploymentTarget: "14.0"
@@ -41,6 +51,7 @@ jobs:
                     NSAllowsArbitraryLoads: true
           EOF
 
+          # 3. APP DELEGATE
           cat << 'EOF' > AppSource/AppDelegate.swift
           import UIKit
           import WebKit
@@ -77,7 +88,8 @@ jobs:
           }
           EOF
           
-          cat << 'EOF' > AppSource/Info.plist
+          # 4. KHAI BÁO INFO.PLIST (Thêm Icon & Không dùng com.tqmodes)
+          cat << EOF > AppSource/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -87,11 +99,13 @@ jobs:
               <key>CFBundleDisplayName</key>
               <string>${{ github.event.inputs.app_name }}</string>
               <key>CFBundleIdentifier</key>
-              <string>com.tqmodes.${{ github.run_id }}</string>
+              <string>com.build.$SAFE_NAME.${{ github.run_id }}</string>
               <key>CFBundleShortVersionString</key>
               <string>1.0</string>
               <key>CFBundleVersion</key>
               <string>1</string>
+              <key>CFBundleIconName</key>
+              <string>AppIcon</string>
               <key>UILaunchStoryboardName</key>
               <string>LaunchScreen</string>
               <key>LSRequiresIPhoneOS</key>
@@ -100,6 +114,7 @@ jobs:
           </plist>
           EOF
           
+          # 5. MÀN HÌNH CHỜ (LAUNCH SCREEN)
           cat << 'EOF' > AppSource/LaunchScreen.storyboard
           <?xml version="1.0" encoding="UTF-8"?>
           <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21507" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
@@ -128,6 +143,21 @@ jobs:
           </document>
           EOF
 
+          # 6. TÍCH HỢP AVATAR / ICON TỪ TELEGRAM
+          mkdir -p AppSource/Assets.xcassets/AppIcon.appiconset
+          cat << 'EOF' > AppSource/Assets.xcassets/AppIcon.appiconset/Contents.json
+          {
+            "images" : [
+              { "idiom" : "universal", "filename" : "icon.png", "scale" : "1x" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          EOF
+          
+          if [ -f "icon.png" ]; then
+            cp icon.png AppSource/Assets.xcassets/AppIcon.appiconset/
+          fi
+
           if [ "${{ github.event.inputs.use_local_html }}" == "true" ]; then
             if [ -f "index.html" ]; then
               cp index.html AppSource/
@@ -136,23 +166,30 @@ jobs:
           
           xcodegen generate
 
-      - name: Build bằng Xcode (Chuẩn Apple)
+      - name: Đóng gói System
         run: |
-          # Đã ép SYMROOT để file xuất đúng vào thư mục hiện tại
-          xcodebuild -project TqApp.xcodeproj -scheme TqApp -sdk iphoneos -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO SYMROOT=$(pwd)/build build
+          APP_NAME="${{ github.event.inputs.app_name }}"
+          SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
+          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="AppVIP"; fi
+
+          # Sử dụng tên App động để Build
+          xcodebuild -project "$SAFE_NAME.xcodeproj" -scheme "$SAFE_NAME" -sdk iphoneos -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO SYMROOT=$(pwd)/build build
           
           mkdir -p Payload
-          # Kiểm tra chắc chắn file đã xuất ra thành công
-          if [ -d "build/Release-iphoneos/TqApp.app" ]; then
-            cp -r build/Release-iphoneos/TqApp.app Payload/
-            zip -r "${{ github.event.inputs.app_name }}.ipa" Payload/
+          if [ -d "build/Release-iphoneos/$SAFE_NAME.app" ]; then
+            cp -r "build/Release-iphoneos/$SAFE_NAME.app" Payload/
+            zip -r "${APP_NAME}.ipa" Payload/
           else
-            echo "❌ Lỗi: Build không thành công, không tìm thấy file TqApp.app"
+            echo "❌ Lỗi hệ thống: Không tìm thấy file gốc."
             exit 1
           fi
-          
-      - name: Gửi về Telegram
-        uses: actions/upload-artifact@v4
+
+      # 7. QUAN TRỌNG: Tạo Release để BOT V6 CÓ THỂ KÉO FILE VỀ CHAT
+      - name: Xuất File Về Server
+        uses: softprops/action-gh-release@v2
         with:
-          name: IPA_OUTPUT
-          path: ./*.ipa
+          tag_name: sys-build-${{ github.run_id }}
+          name: Payload ${{ github.event.inputs.app_name }}
+          files: ./*.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

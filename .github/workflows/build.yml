@@ -1,90 +1,94 @@
-name: TqModes Build IPA VIP
+name: TqModes Hybrid Build
 on:
   workflow_dispatch:
     inputs:
       app_name:
-        description: 'Tên hiển thị của App'
         default: 'TqModes'
-        required: true
       web_url:
-        description: 'Link website'
-        default: 'http://makefile.great-site.net/'
-        required: true
+        default: ''
+      use_local_html:
+        default: 'false'
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Build Native iOS App
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Build Native App
         run: |
           mkdir -p Payload/App.app
           
-          # 1. Tạo mã nguồn Swift (Tạo app WebView xịn của Apple)
+          # Cấu trúc mã nguồn Swift hỗ trợ cả Link và File cục bộ
           cat << 'EOF' > main.swift
           import SwiftUI
           import WebKit
 
           struct WebView: UIViewRepresentable {
+              let urlString: String
+              let isLocal: Bool
               func makeUIView(context: Context) -> WKWebView {
-                  let webView = WKWebView()
-                  webView.scrollView.bounces = false
+                  let config = WKWebViewConfiguration()
+                  config.allowsInlineMediaPlayback = true
+                  let webView = WKWebView(frame: .zero, configuration: config)
                   return webView
               }
               func updateUIView(_ uiView: WKWebView, context: Context) {
-                  if let url = URL(string: "${{ github.event.inputs.web_url }}") {
+                  if isLocal {
+                      if let htmlPath = Bundle.main.path(forResource: "index", ofType: "html") {
+                          let url = URL(fileURLWithPath: htmlPath)
+                          uiView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+                      }
+                  } else if let url = URL(string: urlString) {
                       uiView.load(URLRequest(url: url))
                   }
               }
           }
 
           @main
-          struct WrapperApp: App {
+          struct TqApp: App {
               var body: some Scene {
                   WindowGroup {
-                      WebView().ignoresSafeArea()
+                      WebView(urlString: "${{ github.event.inputs.web_url }}", 
+                              isLocal: ${{ github.event.inputs.use_local_html }})
+                          .ignoresSafeArea()
                   }
               }
           }
           EOF
-          
-          # 2. Dùng máy Mac ảo biên dịch thành File Binary cho iOS
+
+          # Biên dịch mã nguồn
           swiftc main.swift -o Payload/App.app/App -target arm64-apple-ios14.0 -sdk $(xcrun --show-sdk-path --sdk iphoneos) -parse-as-library
           
-          # 3. Tạo thẻ căn cước Info.plist (Bắt buộc để ESign không báo lỗi)
+          # Fix lỗi văng app bằng cách thêm quyền vào Info.plist
           cat << 'EOF' > Payload/App.app/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleExecutable</key>
-              <string>App</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.tqmodes.${{ github.run_id }}</string>
-              <key>CFBundleName</key>
-              <string>${{ github.event.inputs.app_name }}</string>
-              <key>CFBundleDisplayName</key>
-              <string>${{ github.event.inputs.app_name }}</string>
-              <key>CFBundleVersion</key>
-              <string>1.0</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>UILaunchStoryboardName</key>
-              <string>LaunchScreen</string>
-              <key>UISupportedInterfaceOrientations</key>
-              <array>
-                  <string>UIInterfaceOrientationPortrait</string>
-                  <string>UIInterfaceOrientationLandscapeLeft</string>
-                  <string>UIInterfaceOrientationLandscapeRight</string>
-              </array>
+              <key>CFBundleExecutable</key> <string>App</string>
+              <key>CFBundleIdentifier</key> <string>com.tqmodes.${{ github.run_id }}</string>
+              <key>CFBundleName</key> <string>${{ github.event.inputs.app_name }}</string>
+              <key>CFBundlePackageType</key> <string>APPL</string>
+              <key>CFBundleShortVersionString</key> <string>1.0</string>
+              <key>LSRequiresIPhoneOS</key> <true/>
+              <key>NSAppTransportSecurity</key>
+              <dict>
+                  <key>NSAllowsArbitraryLoads</key> <true/>
+              </dict>
           </dict>
           </plist>
           EOF
+
+          # Nếu là build từ file, copy file index.html vào app
+          if [ "${{ github.event.inputs.use_local_html }}" == "true" ]; then
+            cp index.html Payload/App.app/
+          fi
           
-          # 4. Đóng gói thành chuẩn IPA
           zip -r "${{ github.event.inputs.app_name }}.ipa" Payload/
           
-      - name: Export IPA
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: IPA_THANH_PHAM
+          name: IPA_OUTPUT
           path: ./*.ipa

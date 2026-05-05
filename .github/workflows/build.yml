@@ -16,14 +16,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       
-      - name: Cài đặt XcodeGen (Công cụ tạo Project Apple)
+      - name: Cài đặt XcodeGen
         run: brew install xcodegen
 
       - name: Tạo Cấu Trúc App Chuẩn
         run: |
           mkdir -p AppSource
           
-          # 1. Tạo file cấu hình Xcode
           cat << 'EOF' > project.yml
           name: TqApp
           options:
@@ -42,7 +41,6 @@ jobs:
                     NSAllowsArbitraryLoads: true
           EOF
 
-          # 2. Tạo mã nguồn Swift chuẩn bằng UIKit (Chống văng 100%)
           cat << 'EOF' > AppSource/AppDelegate.swift
           import UIKit
           import WebKit
@@ -79,7 +77,6 @@ jobs:
           }
           EOF
           
-          # 3. Tạo Giấy khai sinh Info.plist
           cat << 'EOF' > AppSource/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -103,7 +100,6 @@ jobs:
           </plist>
           EOF
           
-          # 4. Màn hình chờ (Bắt buộc phải có để chống đen màn/văng app)
           cat << 'EOF' > AppSource/LaunchScreen.storyboard
           <?xml version="1.0" encoding="UTF-8"?>
           <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21507" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
@@ -132,23 +128,28 @@ jobs:
           </document>
           EOF
 
-          # 5. Gắn file index.html vào App (Nếu sếp dùng tính năng gửi file)
           if [ "${{ github.event.inputs.use_local_html }}" == "true" ]; then
             if [ -f "index.html" ]; then
               cp index.html AppSource/
             fi
           fi
           
-          # 6. Kích hoạt XcodeGen
           xcodegen generate
 
       - name: Build bằng Xcode (Chuẩn Apple)
         run: |
-          xcodebuild -project TqApp.xcodeproj -scheme TqApp -sdk iphoneos -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
+          # Đã ép SYMROOT để file xuất đúng vào thư mục hiện tại
+          xcodebuild -project TqApp.xcodeproj -scheme TqApp -sdk iphoneos -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO SYMROOT=$(pwd)/build build
           
           mkdir -p Payload
-          cp -r build/Release-iphoneos/TqApp.app Payload/
-          zip -r "${{ github.event.inputs.app_name }}.ipa" Payload/
+          # Kiểm tra chắc chắn file đã xuất ra thành công
+          if [ -d "build/Release-iphoneos/TqApp.app" ]; then
+            cp -r build/Release-iphoneos/TqApp.app Payload/
+            zip -r "${{ github.event.inputs.app_name }}.ipa" Payload/
+          else
+            echo "❌ Lỗi: Build không thành công, không tìm thấy file TqApp.app"
+            exit 1
+          fi
           
       - name: Gửi về Telegram
         uses: actions/upload-artifact@v4

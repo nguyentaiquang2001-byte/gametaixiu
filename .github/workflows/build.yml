@@ -1,10 +1,10 @@
-name: TqDz System Xcode Build
+name: TqDz MAXIMA iOS Builder
 on:
   workflow_dispatch:
     inputs:
       app_name:
         description: 'Tên ứng dụng'
-        default: 'AppVIP'
+        default: 'TqDzApp'
       web_url:
         description: 'Link website (nếu không dùng file local)'
         default: ''
@@ -12,34 +12,36 @@ on:
         description: 'Sử dụng file index.html tải lên'
         default: 'false'
 
-# Cấp quyền ghi để tạo Release và đẩy file IPA
 permissions:
   contents: write 
 
 jobs:
   build:
+    name: Build & Encrypt IPA
     runs-on: macos-latest
     steps:
-      - name: 1. Checkout Source
+      - name: 1. Checkout Source Code
         uses: actions/checkout@v4
       
-      - name: 2. Cài đặt XcodeGen
-        run: brew install xcodegen
-
-      - name: 3. Khởi tạo cấu trúc Project (TqDz Engine)
+      - name: 2. Cài đặt Công Cụ (XcodeGen & Ldid)
         run: |
-          # Lọc tên App: Xóa ký tự đặc biệt để làm ID hệ thống
+          brew install xcodegen
+          brew install ldid
+
+      - name: 3. Khởi tạo cấu trúc TqDz VIP Engine
+        run: |
+          # Lọc tên App: Xóa ký tự đặc biệt, khoảng trắng để làm ID hệ thống (Chống Crash)
           APP_NAME="${{ github.event.inputs.app_name }}"
           SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
-          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="AppVIP"; fi
+          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="TqDzApp"; fi
 
           mkdir -p AppSource
           
-          # TẠO FILE CẤU HÌNH PROJECT.YML
+          # TẠO FILE CẤU HÌNH PROJECT.YML CHUẨN
           cat << EOF > project.yml
           name: $SAFE_NAME
           options:
-            bundleIdPrefix: com.tqdz.build
+            bundleIdPrefix: com.tqdz.maxima
           targets:
             $SAFE_NAME:
               type: application
@@ -52,9 +54,10 @@ jobs:
                   UILaunchStoryboardName: LaunchScreen
                   NSAppTransportSecurity:
                     NSAllowsArbitraryLoads: true
+                  UIRequiresFullScreen: true
           EOF
 
-          # TẠO APP DELEGATE (Lõi xử lý WebView)
+          # TẠO APP DELEGATE (Lõi WebView - Native Feel & Dark Mode)
           cat << 'EOF' > AppSource/AppDelegate.swift
           import UIKit
           import WebKit
@@ -64,10 +67,32 @@ jobs:
               var window: UIWindow?
               func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
                   window = UIWindow(frame: UIScreen.main.bounds)
+                  
+                  // Ép Dark Mode cực xịn
+                  window?.overrideUserInterfaceStyle = .dark
+                  
                   let vc = UIViewController()
-                  let webView = WKWebView(frame: UIScreen.main.bounds)
+                  vc.view.backgroundColor = .black
+                  
+                  // Cấu hình chống Zoom & Ép tỷ lệ hiển thị
+                  let config = WKWebViewConfiguration()
+                  let scriptSource = """
+                      var meta = document.createElement('meta');
+                      meta.name = 'viewport';
+                      meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+                      document.getElementsByTagName('head')[0].appendChild(meta);
+                  """
+                  let script = WKUserScript(source: scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+                  config.userContentController.addUserScript(script)
+                  
+                  let webView = WKWebView(frame: UIScreen.main.bounds, configuration: config)
                   webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                  
+                  // Tắt độ nảy để giống App thật
                   webView.scrollView.bounces = false
+                  webView.scrollView.showsHorizontalScrollIndicator = false
+                  webView.isOpaque = false
+                  webView.backgroundColor = .black
                   
                   let useLocal = "${{ github.event.inputs.use_local_html }}" == "true"
                   let webUrl = "${{ github.event.inputs.web_url }}"
@@ -77,7 +102,7 @@ jobs:
                           let url = URL(fileURLWithPath: htmlPath)
                           webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
                       } else {
-                          webView.loadHTMLString("<h1 style='text-align:center;margin-top:50%;'>Hệ thống TqDz: Chưa tìm thấy file index.html</h1>", baseURL: nil)
+                          webView.loadHTMLString("<h1 style='text-align:center;margin-top:50%;color:gold;'>TqDz Engine: Missing index.html</h1>", baseURL: nil)
                       }
                   } else if let url = URL(string: webUrl) {
                       webView.load(URLRequest(url: url))
@@ -104,7 +129,7 @@ jobs:
               <key>CFBundleIdentifier</key>
               <string>com.tqdz.$SAFE_NAME.${{ github.run_id }}</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
+              <string>MAXIMA.1.0</string>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>CFBundleIconName</key>
@@ -113,11 +138,15 @@ jobs:
               <string>LaunchScreen</string>
               <key>LSRequiresIPhoneOS</key>
               <true/>
+              <key>UIStatusBarStyle</key>
+              <string>UIStatusBarStyleLightContent</string>
+              <key>UIViewControllerBasedStatusBarAppearance</key>
+              <false/>
           </dict>
           </plist>
           EOF
           
-          # TẠO MÀN HÌNH CHỜ (LAUNCH SCREEN)
+          # TẠO MÀN HÌNH CHỜ (Đen trơn đồng bộ Dark Mode)
           cat << 'EOF' > AppSource/LaunchScreen.storyboard
           <?xml version="1.0" encoding="UTF-8"?>
           <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21507" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
@@ -135,7 +164,7 @@ jobs:
                               <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
                                   <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                                   <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                                  <color key="backgroundColor" white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                  <color key="backgroundColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
                               </view>
                           </viewController>
                           <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
@@ -146,11 +175,11 @@ jobs:
           </document>
           EOF
 
-      - name: 4. Xử lý Icon & HTML (Fix lỗi Icon trắng)
+      - name: 4. Xử lý Tài nguyên (Icon, HTML)
         run: |
           mkdir -p AppSource/Assets.xcassets/AppIcon.appiconset
           
-          # Tạo file Contents.json chuẩn Apple cho AppIcon
+          # Nội dung Contents.json chuẩn Apple
           cat << 'EOF' > AppSource/Assets.xcassets/AppIcon.appiconset/Contents.json
           {
             "images" : [
@@ -162,24 +191,24 @@ jobs:
           }
           EOF
           
-          # Kiểm tra và nạp file Icon từ Bot (phải là tên icon.png)
-          if [ -f "icon.png" ]; then
-            cp icon.png AppSource/Assets.xcassets/AppIcon.appiconset/
+          # Fix đồng bộ tên Icon từ Bot Telegram (AppIcon.png -> icon.png)
+          if [ -f "AppIcon.png" ]; then
+            cp AppIcon.png AppSource/Assets.xcassets/AppIcon.appiconset/icon.png
+          elif [ -f "icon.png" ]; then
+            cp icon.png AppSource/Assets.xcassets/AppIcon.appiconset/icon.png
           fi
 
-          # Kiểm tra và nạp file HTML nếu có
           if [ "${{ github.event.inputs.use_local_html }}" == "true" ] && [ -f "index.html" ]; then
             cp index.html AppSource/
           fi
           
-          # Chạy XcodeGen để dựng Project
           xcodegen generate
 
-      - name: 5. Biên dịch & Đóng gói IPA
+      - name: 5. Biên dịch & Pseudo Sign (Ký Giả Lập)
         run: |
           APP_NAME="${{ github.event.inputs.app_name }}"
           SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
-          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="AppVIP"; fi
+          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="TqDzApp"; fi
 
           # Build ứng dụng sang file .app
           xcodebuild -project "$SAFE_NAME.xcodeproj" \
@@ -191,21 +220,30 @@ jobs:
                      CODE_SIGNING_ALLOWED=NO \
                      SYMROOT=$(pwd)/build build
           
-          # Tạo cấu trúc Payload để nén IPA
           mkdir -p Payload
           if [ -d "build/Release-iphoneos/$SAFE_NAME.app" ]; then
             cp -r "build/Release-iphoneos/$SAFE_NAME.app" Payload/
+            
+            # KÝ GIẢ LẬP BẰNG LDID ĐỂ CÀI TROLLSTORE / ESIGN KHÔNG BỊ CRASH
+            echo "Kích hoạt TqDz Shield - Signing with ldid..."
+            ldid -S Payload/$SAFE_NAME.app
+            
             zip -vr "${APP_NAME}.ipa" Payload/
           else
             echo "❌ Lỗi: Không tìm thấy file build .app"
             exit 1
           fi
 
-      - name: 6. Đẩy file lên Release (Để Bot Telegram lấy về)
+      - name: 6. Cập nhật lên Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_id }}
-          name: "Sản phẩm của TqDz: ${{ github.event.inputs.app_name }}"
+          name: "🔥 TqDz MAXIMA: ${{ github.event.inputs.app_name }}"
+          body: |
+            **Bản dựng hoàn chỉnh từ TqDz Builder System**
+            - 🛡 Trạng thái: **Thành công**
+            - 📱 Ứng dụng: `${{ github.event.inputs.app_name }}`
+            - 🔒 Pseudo Signed: **Sẵn sàng cho ESign/TrollStore**
           files: ./*.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

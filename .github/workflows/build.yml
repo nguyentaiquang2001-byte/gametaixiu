@@ -1,53 +1,247 @@
-name: TqDz MAXIMA iOS Builder
+name: ⚜️ TqDz MAXIMA v4 — Ultra iOS Builder
 on:
   workflow_dispatch:
     inputs:
       app_name:
-        description: 'Tên ứng dụng'
+        description: '📱 Tên ứng dụng'
         default: 'TqDzApp'
       web_url:
-        description: 'Link website (nếu không dùng file local)'
+        description: '🌐 Link website (bỏ trống nếu dùng file local)'
         default: ''
       use_local_html:
-        description: 'Sử dụng file index.html tải lên'
+        description: '📄 Dùng file index.html tải lên (true/false)'
         default: 'false'
+      app_version:
+        description: '🔢 Phiên bản App'
+        default: '1.0.0'
+      dark_mode:
+        description: '🌙 Dark Mode (true/false)'
+        default: 'true'
+      bundle_prefix:
+        description: '🆔 Bundle ID prefix'
+        default: 'com.tqdz.maxima'
 
 permissions:
-  contents: write 
+  contents: write
 
 jobs:
   build:
-    name: Build & Encrypt IPA
+    name: ⚜️ Build & Package IPA
     runs-on: macos-latest
-    steps:
-      - name: 1. Checkout Source Code
-        uses: actions/checkout@v4
-      
-      - name: 2. Cài đặt Công Cụ (XcodeGen & Ldid)
-        run: |
-          brew install xcodegen
-          brew install ldid
+    env:
+      APP_NAME: ${{ github.event.inputs.app_name }}
+      APP_VERSION: ${{ github.event.inputs.app_version }}
+      DARK_MODE: ${{ github.event.inputs.dark_mode }}
+      BUNDLE_PREFIX: ${{ github.event.inputs.bundle_prefix }}
 
-      - name: 3. Khởi tạo cấu trúc TqDz VIP Engine
+    steps:
+      # ════════════════════════════════════════════════════════════
+      # STEP 1: Checkout
+      # ════════════════════════════════════════════════════════════
+      - name: "1️⃣  Checkout Source Code"
+        uses: actions/checkout@v4
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 2: Cài đặt công cụ
+      # ════════════════════════════════════════════════════════════
+      - name: "2️⃣  Cài đặt XcodeGen, Ldid & Python deps"
         run: |
-          # Lọc tên App: Xóa ký tự đặc biệt, khoảng trắng để làm ID hệ thống (Chống Crash)
-          APP_NAME="${{ github.event.inputs.app_name }}"
+          brew install xcodegen ldid imagemagick
+          pip3 install pillow requests --break-system-packages 2>/dev/null || pip3 install pillow requests
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 3: Xử lý tên App & chuẩn bị thư mục
+      # ════════════════════════════════════════════════════════════
+      - name: "3️⃣  Chuẩn bị môi trường Build"
+        run: |
+          # Lọc tên an toàn
           SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
           if [ -z "$SAFE_NAME" ]; then SAFE_NAME="TqDzApp"; fi
+          echo "SAFE_NAME=$SAFE_NAME" >> $GITHUB_ENV
 
           mkdir -p AppSource
-          
-          # TẠO FILE CẤU HÌNH PROJECT.YML CHUẨN
+          mkdir -p AppSource/Assets.xcassets/AppIcon.appiconset
+          mkdir -p BuildLogs
+          echo "✅ Môi trường sẵn sàng: $SAFE_NAME v$APP_VERSION"
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 4: Tạo Avatar động bằng Python nếu không có AppIcon.png
+      # ════════════════════════════════════════════════════════════
+      - name: "4️⃣  Xử lý & Tạo Avatar App Icon"
+        run: |
+          python3 << 'PYEOF'
+          import os, sys, random, hashlib
+          from PIL import Image, ImageDraw, ImageFont
+
+          app_name = os.environ.get("APP_NAME", "TqDzApp")
+          safe_name = os.environ.get("SAFE_NAME", "TqDzApp")
+
+          icon_src  = "AppIcon.png"
+          icon_dest = "AppSource/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
+
+          # ── Nếu đã có AppIcon từ Bot Telegram ──────────────────
+          if os.path.exists(icon_src):
+              print(f"✅ Dùng icon từ Bot Telegram: {icon_src}")
+              img = Image.open(icon_src).convert("RGBA").resize((1024, 1024), Image.LANCZOS)
+              # Thêm viền gradient vàng đẹp
+              draw = ImageDraw.Draw(img)
+              for i in range(12):
+                  alpha = int(220 * (1 - i/12))
+                  draw.ellipse([i, i, 1023-i, 1023-i],
+                               outline=(212, 175, 55, alpha), width=2)
+              img.save(icon_dest, "PNG")
+              print(f"✅ Icon đã xử lý & lưu tại: {icon_dest}")
+
+          # ── Không có icon → Tự tạo avatar chữ cái đẹp ─────────
+          else:
+              print("⚙️ Không có AppIcon.png → Tự tạo avatar động...")
+              SIZE = 1024
+              BORDER = 18
+
+              # Màu dựa trên hash tên app (nhất quán mỗi lần build)
+              seed  = int(hashlib.md5(app_name.encode()).hexdigest(), 16)
+              palettes = [
+                  [(212,175,55),  (180,140,20)],   # Gold
+                  [(0,200,100),   (0,150,70)],      # Emerald
+                  [(138,43,226),  (100,20,180)],    # Purple
+                  [(0,180,220),   (0,120,180)],     # Cyan
+                  [(255,60,100),  (200,20,60)],     # Rose
+                  [(255,120,0),   (200,80,0)],      # Orange
+              ]
+              c1, c2 = palettes[seed % len(palettes)]
+
+              img  = Image.new("RGBA", (SIZE, SIZE), (0,0,0,0))
+              draw = ImageDraw.Draw(img)
+
+              # Nền tròn gradient giả bằng nhiều ellipse
+              for i in range(SIZE//2):
+                  t   = i / (SIZE//2)
+                  r   = int(c1[0]*(1-t) + c2[0]*t)
+                  g   = int(c1[1]*(1-t) + c2[1]*t)
+                  b   = int(c1[2]*(1-t) + c2[2]*t)
+                  draw.ellipse([i, i, SIZE-1-i, SIZE-1-i], fill=(r,g,b,255))
+
+              # Highlight trên cùng
+              for i in range(SIZE//4):
+                  alpha = int(60 * (1 - i/(SIZE//4)))
+                  lighter = tuple(min(c+60,255) for c in c1)
+                  draw.ellipse([i, i, SIZE//2-i, SIZE//2-i], fill=(*lighter, alpha))
+
+              # Chữ cái viết tắt
+              words    = app_name.strip().split()
+              initials = "".join(w[0].upper() for w in words[:2]) if words else "TQ"
+
+              font_size = 420 if len(initials)==1 else 340
+              font_path = "/System/Library/Fonts/Helvetica.ttc"
+              try:
+                  font = ImageFont.truetype(font_path, font_size)
+              except:
+                  try:
+                      font = ImageFont.truetype("/System/Library/Fonts/SFCompact.ttf", font_size)
+                  except:
+                      font = ImageFont.load_default()
+
+              # Shadow
+              try:
+                  l,t,r,b = font.getbbox(initials)
+                  tx = (SIZE-(r-l))//2 - l
+                  ty = (SIZE-(b-t))//2 - t
+              except:
+                  tx, ty = SIZE//4, SIZE//4
+
+              draw.text((tx+10, ty+10), initials, font=font, fill=(0,0,0,120))
+              draw.text((tx+5,  ty+5),  initials, font=font, fill=(0,0,0,60))
+              draw.text((tx,    ty),    initials, font=font, fill=(255,255,255,255))
+
+              # Viền vàng đẹp
+              for i in range(BORDER):
+                  alpha = int(230 * (1 - i/BORDER))
+                  draw.ellipse([i,i,SIZE-1-i,SIZE-1-i], outline=(255,215,0,alpha), width=1)
+
+              # Watermark TqDz nhỏ dưới cùng
+              try:
+                  wm_font = ImageFont.truetype(font_path, 52)
+                  draw.text((SIZE//2-60, SIZE-90), "TqDz v4", font=wm_font, fill=(255,255,255,100))
+              except: pass
+
+              img.save(icon_dest, "PNG")
+              print(f"✅ Avatar tự tạo lưu tại: {icon_dest}")
+              # Cũng lưu ra root để dùng sau
+              img.save("AppIcon_generated.png", "PNG")
+
+          # ── Tạo bộ icon tất cả size Apple yêu cầu ──────────────
+          master = Image.open(icon_dest).convert("RGBA")
+          sizes = {
+              "icon_20.png":   20,  "icon_40.png":  40,  "icon_60.png":  60,
+              "icon_29.png":   29,  "icon_58.png":  58,  "icon_87.png":  87,
+              "icon_76.png":   76,  "icon_152.png": 152, "icon_167.png": 167,
+              "icon_120.png":  120, "icon_180.png": 180, "icon_1024.png":1024,
+          }
+          base = "AppSource/Assets.xcassets/AppIcon.appiconset/"
+          for fname, sz in sizes.items():
+              master.resize((sz,sz), Image.LANCZOS).save(base+fname, "PNG")
+          print(f"✅ Đã tạo {len(sizes)} kích thước icon")
+          PYEOF
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 5: Tạo Contents.json icon đầy đủ
+      # ════════════════════════════════════════════════════════════
+      - name: "5️⃣  Tạo Icon Asset Catalog"
+        run: |
+          cat << 'EOF' > AppSource/Assets.xcassets/AppIcon.appiconset/Contents.json
+          {
+            "images": [
+              {"idiom":"iphone","scale":"2x","size":"20x20","filename":"icon_40.png"},
+              {"idiom":"iphone","scale":"3x","size":"20x20","filename":"icon_60.png"},
+              {"idiom":"iphone","scale":"2x","size":"29x29","filename":"icon_58.png"},
+              {"idiom":"iphone","scale":"3x","size":"29x29","filename":"icon_87.png"},
+              {"idiom":"iphone","scale":"2x","size":"40x40","filename":"icon_80.png"},
+              {"idiom":"iphone","scale":"3x","size":"40x40","filename":"icon_120.png"},
+              {"idiom":"iphone","scale":"2x","size":"60x60","filename":"icon_120.png"},
+              {"idiom":"iphone","scale":"3x","size":"60x60","filename":"icon_180.png"},
+              {"idiom":"ipad","scale":"1x","size":"20x20","filename":"icon_20.png"},
+              {"idiom":"ipad","scale":"2x","size":"20x20","filename":"icon_40.png"},
+              {"idiom":"ipad","scale":"1x","size":"29x29","filename":"icon_29.png"},
+              {"idiom":"ipad","scale":"2x","size":"29x29","filename":"icon_58.png"},
+              {"idiom":"ipad","scale":"1x","size":"40x40","filename":"icon_40.png"},
+              {"idiom":"ipad","scale":"2x","size":"40x40","filename":"icon_80.png"},
+              {"idiom":"ipad","scale":"1x","size":"76x76","filename":"icon_76.png"},
+              {"idiom":"ipad","scale":"2x","size":"76x76","filename":"icon_152.png"},
+              {"idiom":"ipad","scale":"2x","size":"83.5x83.5","filename":"icon_167.png"},
+              {"idiom":"ios-marketing","scale":"1x","size":"1024x1024","filename":"icon_1024.png"}
+            ],
+            "info": {"author":"tqdz-maxima-v4","version":1}
+          }
+          EOF
+          # Tạo size còn thiếu
+          python3 -c "
+          from PIL import Image
+          m = Image.open('AppSource/Assets.xcassets/AppIcon.appiconset/icon_1024.png')
+          m.resize((80,80),Image.LANCZOS).save('AppSource/Assets.xcassets/AppIcon.appiconset/icon_80.png')
+          print('✅ icon_80.png OK')
+          "
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 6: Tạo project.yml + Swift source
+      # ════════════════════════════════════════════════════════════
+      - name: "6️⃣  Khởi tạo TqDz WebView Engine"
+        run: |
+          SAFE_NAME="${SAFE_NAME}"
+          UI_STYLE=$( [ "$DARK_MODE" = "true" ] && echo ".dark" || echo ".light" )
+
           cat << EOF > project.yml
-          name: $SAFE_NAME
+          name: ${SAFE_NAME}
           options:
-            bundleIdPrefix: com.tqdz.maxima
+            bundleIdPrefix: ${BUNDLE_PREFIX}
+            deploymentTarget:
+              iOS: "14.0"
           targets:
-            $SAFE_NAME:
+            ${SAFE_NAME}:
               type: application
               platform: iOS
               deploymentTarget: "14.0"
-              sources: [AppSource]
+              sources:
+                - AppSource
               info:
                 path: AppSource/Info.plist
                 properties:
@@ -55,195 +249,495 @@ jobs:
                   NSAppTransportSecurity:
                     NSAllowsArbitraryLoads: true
                   UIRequiresFullScreen: true
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationPortrait
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  UIUserInterfaceStyle: $( [ "$DARK_MODE" = "true" ] && echo "Dark" || echo "Light" )
           EOF
 
-          # TẠO APP DELEGATE (Lõi WebView - Native Feel & Dark Mode)
-          cat << 'EOF' > AppSource/AppDelegate.swift
+          # ── AppDelegate.swift — TqDz WebView Engine Pro ──────────
+          cat << SWIFTEOF > AppSource/AppDelegate.swift
           import UIKit
           import WebKit
 
           @UIApplicationMain
-          class AppDelegate: UIResponder, UIApplicationDelegate {
+          class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
               var window: UIWindow?
-              func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+              var webView: WKWebView!
+              var progressBar: UIView!
+
+              func application(_ application: UIApplication,
+                               didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
                   window = UIWindow(frame: UIScreen.main.bounds)
-                  
-                  // Ép Dark Mode cực xịn
-                  window?.overrideUserInterfaceStyle = .dark
-                  
+                  window?.overrideUserInterfaceStyle = ${UI_STYLE}
+
                   let vc = UIViewController()
                   vc.view.backgroundColor = .black
-                  
-                  // Cấu hình chống Zoom & Ép tỷ lệ hiển thị
+
+                  // ── WKWebView Config ──────────────────────────────────
                   let config = WKWebViewConfiguration()
-                  let scriptSource = """
-                      var meta = document.createElement('meta');
-                      meta.name = 'viewport';
-                      meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
-                      document.getElementsByTagName('head')[0].appendChild(meta);
-                  """
-                  let script = WKUserScript(source: scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-                  config.userContentController.addUserScript(script)
-                  
-                  let webView = WKWebView(frame: UIScreen.main.bounds, configuration: config)
+                  config.allowsInlineMediaPlayback = true
+                  config.mediaTypesRequiringUserActionForPlayback = []
+
+                  // Viewport meta — chống zoom, full responsive
+                  let vpScript = WKUserScript(
+                      source: """
+                          var m = document.createElement('meta');
+                          m.name = 'viewport';
+                          m.content = 'width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no';
+                          document.head.appendChild(m);
+                          // Ẩn scrollbar
+                          var s = document.createElement('style');
+                          s.textContent = '::-webkit-scrollbar{display:none}body{-webkit-overflow-scrolling:touch}';
+                          document.head.appendChild(s);
+                      """,
+                      injectionTime: .atDocumentEnd,
+                      forMainFrameOnly: false
+                  )
+                  config.userContentController.addUserScript(vpScript)
+
+                  // ── WKWebView ─────────────────────────────────────────
+                  webView = WKWebView(frame: UIScreen.main.bounds, configuration: config)
                   webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                  
-                  // Tắt độ nảy để giống App thật
                   webView.scrollView.bounces = false
                   webView.scrollView.showsHorizontalScrollIndicator = false
+                  webView.scrollView.showsVerticalScrollIndicator = false
                   webView.isOpaque = false
                   webView.backgroundColor = .black
-                  
-                  let useLocal = "${{ github.event.inputs.use_local_html }}" == "true"
-                  let webUrl = "${{ github.event.inputs.web_url }}"
-                  
-                  if useLocal {
-                      if let htmlPath = Bundle.main.path(forResource: "index", ofType: "html") {
-                          let url = URL(fileURLWithPath: htmlPath)
-                          webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
-                      } else {
-                          webView.loadHTMLString("<h1 style='text-align:center;margin-top:50%;color:gold;'>TqDz Engine: Missing index.html</h1>", baseURL: nil)
-                      }
-                  } else if let url = URL(string: webUrl) {
-                      webView.load(URLRequest(url: url))
-                  }
-                  
+                  webView.scrollView.backgroundColor = .black
+                  webView.navigationDelegate = self
+                  webView.uiDelegate = self
+                  webView.addObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress),
+                                      options: .new, context: nil)
+
+                  // ── Progress Bar ──────────────────────────────────────
+                  progressBar = UIView(frame: CGRect(x: 0, y: 0, width: 0, height: 3))
+                  progressBar.backgroundColor = UIColor(red: 212/255, green: 175/255, blue: 55/255, alpha: 1)
+                  progressBar.layer.cornerRadius = 1.5
+
                   vc.view.addSubview(webView)
+                  vc.view.addSubview(progressBar)
+                  vc.view.bringSubviewToFront(progressBar)
+
+                  // ── Load Content ──────────────────────────────────────
+                  let useLocal = "${{ github.event.inputs.use_local_html }}" == "true"
+                  let webUrl   = "${{ github.event.inputs.web_url }}"
+
+                  if useLocal {
+                      if let path = Bundle.main.path(forResource: "index", ofType: "html") {
+                          webView.loadFileURL(URL(fileURLWithPath: path),
+                                              allowingReadAccessTo: URL(fileURLWithPath: path).deletingLastPathComponent())
+                      } else {
+                          let fallback = """
+                          <html><body style='background:#000;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>
+                          <div style='text-align:center;color:#D4AF37;font-family:-apple-system'>
+                          <div style='font-size:60px'>⚜️</div>
+                          <h2>TqDz MAXIMA v4</h2>
+                          <p style='color:#888'>index.html không tìm thấy</p></div></body></html>
+                          """
+                          webView.loadHTMLString(fallback, baseURL: nil)
+                      }
+                  } else if !webUrl.isEmpty, let url = URL(string: webUrl) {
+                      var req = URLRequest(url: url)
+                      req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+                      webView.load(req)
+                  }
+
                   window?.rootViewController = vc
                   window?.makeKeyAndVisible()
                   return true
               }
+
+              // KVO: Progress bar animation
+              override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                                         change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+                  guard keyPath == "estimatedProgress" else { return }
+                  let progress = CGFloat(webView.estimatedProgress)
+                  let width    = UIScreen.main.bounds.width * progress
+                  UIView.animate(withDuration: 0.2) {
+                      self.progressBar.frame.size.width = width
+                  }
+                  if webView.estimatedProgress >= 1.0 {
+                      UIView.animate(withDuration: 0.4, delay: 0.3, options: [], animations: {
+                          self.progressBar.alpha = 0
+                      }) { _ in self.progressBar.alpha = 1; self.progressBar.frame.size.width = 0 }
+                  }
+              }
+
+              // Mở link ngoài trong Safari
+              func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                           decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                  if action.navigationType == .linkActivated,
+                     let url = action.request.url,
+                     url.scheme != "http", url.scheme != "https" {
+                      UIApplication.shared.open(url)
+                      decisionHandler(.cancel); return
+                  }
+                  decisionHandler(.allow)
+              }
+
+              // Alert JS
+              func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                           initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+                  let alert = UIAlertController(title: "Thông báo", message: message, preferredStyle: .alert)
+                  alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+                  window?.rootViewController?.present(alert, animated: true)
+              }
           }
-          EOF
-          
-          # KHAI BÁO INFO.PLIST
+          SWIFTEOF
+
+          # ── Info.plist ────────────────────────────────────────────
           cat << EOF > AppSource/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>CFBundleName</key>
-              <string>${{ github.event.inputs.app_name }}</string>
-              <key>CFBundleDisplayName</key>
-              <string>${{ github.event.inputs.app_name }}</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.tqdz.$SAFE_NAME.${{ github.run_id }}</string>
-              <key>CFBundleShortVersionString</key>
-              <string>MAXIMA.1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>CFBundleIconName</key>
-              <string>AppIcon</string>
-              <key>UILaunchStoryboardName</key>
-              <string>LaunchScreen</string>
-              <key>LSRequiresIPhoneOS</key>
-              <true/>
-              <key>UIStatusBarStyle</key>
-              <string>UIStatusBarStyleLightContent</string>
-              <key>UIViewControllerBasedStatusBarAppearance</key>
-              <false/>
+              <key>CFBundleName</key><string>${APP_NAME}</string>
+              <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
+              <key>CFBundleIdentifier</key><string>${BUNDLE_PREFIX}.${SAFE_NAME}.${{ github.run_id }}</string>
+              <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+              <key>CFBundleVersion</key><string>${{ github.run_number }}</string>
+              <key>CFBundleIconName</key><string>AppIcon</string>
+              <key>UILaunchStoryboardName</key><string>LaunchScreen</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>NSAppTransportSecurity</key>
+              <dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+              <key>UIRequiresFullScreen</key><true/>
+              <key>UIStatusBarStyle</key><string>UIStatusBarStyleLightContent</string>
+              <key>UIViewControllerBasedStatusBarAppearance</key><false/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+              <key>UIUserInterfaceStyle</key>
+              <string>${{ github.event.inputs.dark_mode == 'true' && 'Dark' || 'Light' }}</string>
           </dict>
           </plist>
           EOF
-          
-          # TẠO MÀN HÌNH CHỜ (Đen trơn đồng bộ Dark Mode)
+
+          # ── LaunchScreen.storyboard (Dark) ────────────────────────
           cat << 'EOF' > AppSource/LaunchScreen.storyboard
           <?xml version="1.0" encoding="UTF-8"?>
-          <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="21507" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
-              <device id="retina6_12" orientation="portrait" appearance="light"/>
-              <dependencies>
-                  <deployment identifier="iOS"/>
-                  <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="21505"/>
-                  <capability name="Safe area layout guides" minToolsVersion="9.0"/>
-                  <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
-              </dependencies>
-              <scenes>
-                  <scene sceneID="EHf-IW-A2E">
-                      <objects>
-                          <viewController id="01J-lp-oVM" sceneMemberID="viewController">
-                              <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
-                                  <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
-                                  <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                                  <color key="backgroundColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-                              </view>
-                          </viewController>
-                          <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
-                      </objects>
-                      <point key="canvasLocation" x="53" y="375"/>
-                  </scene>
-              </scenes>
+          <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0"
+                    toolsVersion="21507" targetRuntime="iOS.CocoaTouch"
+                    propertyAccessControl="none" useAutolayout="YES" launchScreen="YES"
+                    useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES"
+                    initialViewController="01J-lp-oVM">
+            <device id="retina6_12" orientation="portrait" appearance="light"/>
+            <dependencies>
+              <deployment identifier="iOS"/>
+              <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="21505"/>
+              <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+              <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+            </dependencies>
+            <scenes>
+              <scene sceneID="EHf-IW-A2E">
+                <objects>
+                  <viewController id="01J-lp-oVM" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
+                      <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                      <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                      <subviews>
+                        <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO"
+                               contentMode="left" horizontalHuggingPriority="251"
+                               verticalHuggingPriority="251" text="⚜️"
+                               textAlignment="center" lineBreakMode="middleTruncation"
+                               baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO"
+                               translatesAutoresizingMaskIntoConstraints="NO" id="abc-de-fgh">
+                          <rect key="frame" x="146.5" y="390" width="100" height="80"/>
+                          <fontDescription key="fontDescription" type="system" pointSize="60"/>
+                          <nil key="textColor"/>
+                          <nil key="highlightedColor"/>
+                        </label>
+                      </subviews>
+                      <color key="backgroundColor" white="0.0" alpha="1"
+                             colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                      <constraints>
+                        <constraint firstItem="abc-de-fgh" firstAttribute="centerX"
+                                    secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="cx1"/>
+                        <constraint firstItem="abc-de-fgh" firstAttribute="centerY"
+                                    secondItem="Ze5-6b-2t3" secondAttribute="centerY" id="cy1"/>
+                      </constraints>
+                    </view>
+                  </viewController>
+                  <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1"
+                               userLabel="First Responder" sceneMemberID="firstResponder"/>
+                </objects>
+                <point key="canvasLocation" x="53" y="375"/>
+              </scene>
+            </scenes>
           </document>
           EOF
 
-      - name: 4. Xử lý Tài nguyên (Icon, HTML)
+      # ════════════════════════════════════════════════════════════
+      # STEP 7: Copy HTML nếu dùng local
+      # ════════════════════════════════════════════════════════════
+      - name: "7️⃣  Copy file HTML & Generate Xcode Project"
         run: |
-          mkdir -p AppSource/Assets.xcassets/AppIcon.appiconset
-          
-          # Nội dung Contents.json chuẩn Apple
-          cat << 'EOF' > AppSource/Assets.xcassets/AppIcon.appiconset/Contents.json
-          {
-            "images" : [
-              { "idiom" : "universal", "filename" : "icon.png", "scale" : "1x" },
-              { "idiom" : "universal", "filename" : "icon.png", "scale" : "2x" },
-              { "idiom" : "universal", "filename" : "icon.png", "scale" : "3x" }
-            ],
-            "info" : { "author" : "xcode", "version" : 1 }
-          }
-          EOF
-          
-          # Fix đồng bộ tên Icon từ Bot Telegram (AppIcon.png -> icon.png)
-          if [ -f "AppIcon.png" ]; then
-            cp AppIcon.png AppSource/Assets.xcassets/AppIcon.appiconset/icon.png
-          elif [ -f "icon.png" ]; then
-            cp icon.png AppSource/Assets.xcassets/AppIcon.appiconset/icon.png
-          fi
-
           if [ "${{ github.event.inputs.use_local_html }}" == "true" ] && [ -f "index.html" ]; then
             cp index.html AppSource/
+            echo "✅ Đã copy index.html vào AppSource"
           fi
-          
           xcodegen generate
+          echo "✅ Xcode project đã tạo: ${SAFE_NAME}.xcodeproj"
 
-      - name: 5. Biên dịch & Pseudo Sign (Ký Giả Lập)
+      # ════════════════════════════════════════════════════════════
+      # STEP 8: Build IPA
+      # ════════════════════════════════════════════════════════════
+      - name: "8️⃣  Biên dịch & Pseudo Sign IPA"
         run: |
-          APP_NAME="${{ github.event.inputs.app_name }}"
-          SAFE_NAME=$(echo "$APP_NAME" | tr -dc 'a-zA-Z0-9')
-          if [ -z "$SAFE_NAME" ]; then SAFE_NAME="TqDzApp"; fi
+          set -e
+          echo "🔨 Bắt đầu build: ${SAFE_NAME} v${APP_VERSION}"
 
-          # Build ứng dụng sang file .app
-          xcodebuild -project "$SAFE_NAME.xcodeproj" \
-                     -scheme "$SAFE_NAME" \
+          xcodebuild -project "${SAFE_NAME}.xcodeproj" \
+                     -scheme "${SAFE_NAME}" \
                      -sdk iphoneos \
                      -configuration Release \
                      CODE_SIGN_IDENTITY="" \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGNING_ALLOWED=NO \
-                     SYMROOT=$(pwd)/build build
-          
-          mkdir -p Payload
-          if [ -d "build/Release-iphoneos/$SAFE_NAME.app" ]; then
-            cp -r "build/Release-iphoneos/$SAFE_NAME.app" Payload/
-            
-            # KÝ GIẢ LẬP BẰNG LDID ĐỂ CÀI TROLLSTORE / ESIGN KHÔNG BỊ CRASH
-            echo "Kích hoạt TqDz Shield - Signing with ldid..."
-            ldid -S Payload/$SAFE_NAME.app
-            
-            zip -vr "${APP_NAME}.ipa" Payload/
-          else
-            echo "❌ Lỗi: Không tìm thấy file build .app"
+                     SYMROOT=$(pwd)/build \
+                     2>&1 | tee BuildLogs/xcodebuild.log | grep -E "(error:|warning:|Build succeeded|Build FAILED)" || true
+
+          APP_BUNDLE="build/Release-iphoneos/${SAFE_NAME}.app"
+          if [ ! -d "$APP_BUNDLE" ]; then
+            echo "❌ Build thất bại! Xem log:"
+            tail -50 BuildLogs/xcodebuild.log
             exit 1
           fi
 
-      - name: 6. Cập nhật lên Release
+          mkdir -p Payload
+          cp -r "$APP_BUNDLE" Payload/
+
+          # Pseudo sign với ldid (ESign / TrollStore compatible)
+          echo "🔏 Ký TqDz Shield với ldid..."
+          ldid -S "Payload/${SAFE_NAME}.app/${SAFE_NAME}"
+
+          # Đóng gói IPA
+          IPA_NAME="${APP_NAME// /_}_v${APP_VERSION}.ipa"
+          zip -qr "$IPA_NAME" Payload/
+          echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
+          echo "✅ IPA sẵn sàng: $IPA_NAME ($(du -sh $IPA_NAME | cut -f1))"
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 9: Tạo file Python standalone kèm theo IPA
+      # ════════════════════════════════════════════════════════════
+      - name: "9️⃣  Tạo Python Script Companion"
+        run: |
+          python3 << PYEOF
+          import os, base64, json
+          from datetime import datetime
+
+          app_name    = os.environ["APP_NAME"]
+          app_version = os.environ["APP_VERSION"]
+          safe_name   = os.environ["SAFE_NAME"]
+          run_id      = "${{ github.run_id }}"
+          run_num     = "${{ github.run_number }}"
+          build_time  = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+          # Đọc icon để nhúng vào Python script
+          icon_path = "AppSource/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
+          icon_b64  = ""
+          if os.path.exists(icon_path):
+              with open(icon_path, "rb") as f:
+                  icon_b64 = base64.b64encode(f.read()).decode()
+
+          script = f'''#!/usr/bin/env python3
+          # ⚜️═══════════════════════════════════════════════════════⚜️
+          #   TqDz MAXIMA v4 — App Companion Script
+          #   App: {app_name} v{app_version}
+          #   Build: #{run_num} | Run: {run_id}
+          #   Generated: {build_time}
+          # ⚜️═══════════════════════════════════════════════════════⚜️
+
+          import os, sys, base64, json, hashlib
+          from datetime import datetime
+
+          APP_INFO = {{
+              "name":      "{app_name}",
+              "version":   "{app_version}",
+              "safe_name": "{safe_name}",
+              "build":     "{run_num}",
+              "run_id":    "{run_id}",
+              "built_at":  "{build_time}",
+              "engine":    "TqDz MAXIMA v4",
+          }}
+
+          ICON_B64 = "{icon_b64}"
+
+          def show_info():
+              print("⚜️  TqDz MAXIMA v4 — App Companion")
+              print("━" * 40)
+              for k, v in APP_INFO.items():
+                  print(f"  {{k:12}}: {{v}}")
+              print("━" * 40)
+
+          def extract_icon(output_path="app_icon.png"):
+              """Xuất icon của app ra file PNG"""
+              if not ICON_B64:
+                  print("❌ Không có icon nhúng trong script"); return
+              data = base64.b64decode(ICON_B64)
+              with open(output_path, "wb") as f: f.write(data)
+              print(f"✅ Icon đã xuất: {{output_path}} ({{len(data)/1024:.1f}} KB)")
+
+          def verify_ipa(ipa_path: str):
+              """Kiểm tra tính toàn vẹn của file IPA"""
+              if not os.path.exists(ipa_path):
+                  print(f"❌ File không tồn tại: {{ipa_path}}"); return
+              with open(ipa_path, "rb") as f: data = f.read()
+              md5    = hashlib.md5(data).hexdigest()
+              sha256 = hashlib.sha256(data).hexdigest()
+              size   = len(data)/1024/1024
+              print(f"📱 IPA: {{ipa_path}}")
+              print(f"📦 Kích thước: {{size:.2f}} MB")
+              print(f"🔑 MD5:    {{md5}}")
+              print(f"🔐 SHA256: {{sha256}}")
+              # Check magic bytes
+              if data[:4] == b"PK\\x03\\x04":
+                  print("✅ Định dạng ZIP/IPA hợp lệ")
+              else:
+                  print("⚠️  Magic bytes bất thường!")
+
+          if __name__ == "__main__":
+              show_info()
+              if len(sys.argv) > 1:
+                  cmd = sys.argv[1]
+                  if cmd == "icon":
+                      extract_icon(sys.argv[2] if len(sys.argv)>2 else "app_icon.png")
+                  elif cmd == "verify" and len(sys.argv) > 2:
+                      verify_ipa(sys.argv[2])
+                  else:
+                      print("Lệnh: python3 companion.py [icon|verify <file.ipa>]")
+              else:
+                  print("\\n💡 Lệnh: python3 companion.py icon | verify <file.ipa>")
+          '''
+
+          out = f"{safe_name}_companion.py"
+          with open(out, "w") as f: f.write(script)
+          print(f"✅ Python companion: {out}")
+          PYEOF
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 10: Upload Release với IPA + Python + Icon
+      # ════════════════════════════════════════════════════════════
+      - name: "🔟  Upload lên GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_id }}
-          name: "🔥 TqDz MAXIMA: ${{ github.event.inputs.app_name }}"
+          tag_name: "build-${{ github.run_id }}"
+          name: "⚜️ TqDz MAXIMA v4 — ${{ github.event.inputs.app_name }} v${{ github.event.inputs.app_version }}"
           body: |
-            **Bản dựng hoàn chỉnh từ TqDz Builder System**
-            - 🛡 Trạng thái: **Thành công**
-            - 📱 Ứng dụng: `${{ github.event.inputs.app_name }}`
-            - 🔒 Pseudo Signed: **Sẵn sàng cho ESign/TrollStore**
-          files: ./*.ipa
+            ## ⚜️ TqDz MAXIMA v4 Build Report
+
+            | Thông tin | Giá trị |
+            |-----------|---------|
+            | 📱 **App Name** | `${{ github.event.inputs.app_name }}` |
+            | 🔢 **Version** | `${{ github.event.inputs.app_version }}` |
+            | 🔨 **Build #** | `${{ github.run_number }}` |
+            | 🌙 **Dark Mode** | `${{ github.event.inputs.dark_mode }}` |
+            | 🌐 **Web URL** | `${{ github.event.inputs.web_url || 'Local HTML' }}` |
+            | ⏰ **Built at** | `${{ github.run_id }}` |
+
+            ## 📦 Files đính kèm
+            - `*.ipa` — File cài đặt iOS (ESign / TrollStore / AltStore)
+            - `*_companion.py` — Python script kiểm tra & xuất icon
+            - `AppIcon_generated.png` — Icon app (nếu tự tạo)
+
+            ## 🚀 Cài đặt
+            1. **TrollStore**: Mở file `.ipa` trực tiếp
+            2. **ESign**: Import `.ipa` → Sign → Install
+            3. **AltStore**: Sideload qua máy tính
+
+            ---
+            *Built by ⚜️ TqDz MAXIMA v4 Engine*
+          files: |
+            *.ipa
+            *_companion.py
+            AppIcon_generated.png
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 11: Upload ảnh lên Imgur & lấy link công khai
+      # ════════════════════════════════════════════════════════════
+      - name: "1️⃣1️⃣  Upload Icon lên Imgur — Lấy Link Public"
+        run: |
+          python3 << 'PYEOF'
+          import os, base64, requests, json
+
+          icon_path = "AppSource/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
+          gen_path  = "AppIcon_generated.png"
+
+          # Chọn file icon
+          path = icon_path if os.path.exists(icon_path) else gen_path
+          if not os.path.exists(path):
+              print("⚠️ Không tìm thấy icon để upload"); exit(0)
+
+          with open(path, "rb") as f:
+              b64 = base64.b64encode(f.read()).decode()
+
+          # Imgur anonymous upload (không cần key)
+          headers = {"Authorization": "Client-ID 546c25a59c58ad7"}
+          data    = {
+              "image": b64,
+              "type":  "base64",
+              "title": f"TqDz App Icon - {os.environ.get('APP_NAME','App')}",
+              "description": f"Built by TqDz MAXIMA v4 | Build #{os.environ.get('GITHUB_RUN_NUMBER','?')}"
+          }
+
+          try:
+              res = requests.post("https://api.imgur.com/3/image", headers=headers, data=data, timeout=30)
+              if res.status_code == 200:
+                  link    = res.json()["data"]["link"]
+                  del_hash = res.json()["data"]["deletehash"]
+                  print(f"✅ Icon uploaded thành công!")
+                  print(f"🔗 Direct link: {link}")
+                  print(f"🗑️ Delete hash: {del_hash}")
+                  # Lưu ra file để Bot Telegram có thể đọc
+                  with open("imgur_result.json", "w") as f:
+                      json.dump({"url": link, "deletehash": del_hash,
+                                 "app": os.environ.get("APP_NAME"), "build": os.environ.get("GITHUB_RUN_NUMBER")}, f)
+                  # Ghi vào GitHub env để step sau dùng
+                  with open(os.environ["GITHUB_ENV"], "a") as ef:
+                      ef.write(f"IMGUR_URL={link}\n")
+                      ef.write(f"IMGUR_DELETE={del_hash}\n")
+              else:
+                  print(f"⚠️ Imgur upload thất bại: {res.status_code}")
+                  print(res.text[:300])
+          except Exception as e:
+              print(f"⚠️ Lỗi upload: {e}")
+          PYEOF
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 12: Build Summary
+      # ════════════════════════════════════════════════════════════
+      - name: "1️⃣2️⃣  Build Summary"
+        if: always()
+        run: |
+          echo ""
+          echo "⚜️════════════════════════════════════════⚜️"
+          echo "      TqDz MAXIMA v4 — BUILD COMPLETE"
+          echo "⚜️════════════════════════════════════════⚜️"
+          echo "📱 App    : $APP_NAME v$APP_VERSION"
+          echo "🔨 Build  : #${{ github.run_number }}"
+          echo "📦 IPA    : $IPA_NAME"
+          echo "🔗 Imgur  : ${IMGUR_URL:-'N/A'}"
+          echo ""
+          ls -lh *.ipa 2>/dev/null || echo "⚠️ Không tìm thấy IPA"
+          echo "⚜️════════════════════════════════════════⚜️"
+
+      # ════════════════════════════════════════════════════════════
+      # STEP 13: Upload imgur_result.json vào Release
+      # ════════════════════════════════════════════════════════════
+      - name: "1️⃣3️⃣  Upload Imgur Result JSON"
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_id }}"
+          files: |
+            imgur_result.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
